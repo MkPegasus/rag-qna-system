@@ -1,0 +1,18 @@
+# Backend
+venv/
+__pycache__/
+*.pyc
+.env
+chroma_db/
+documents/
+users.json
+query_history.json
+documents_index.json
+
+# Frontend
+node_modules/
+dist/
+.lovable/
+
+# General
+.DS_Store

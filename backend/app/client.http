@@ -1,0 +1,8 @@
+#Enregistrement d'un utilisateur
+
+#Login de l'admin
+@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhYjYwMDc2OC05ZTg4LTQxOWQtOWEwMS0zZTQ5ZDBhMWFjMzEiLCJlbWFpbCI6ImFkbWluQHJhZy5jb20iLCJyb2xlIjoiQURNSU4iLCJleHAiOjE3ODIwMDU0OTJ9.2NTg9DtWk31iaDm1svd6XKXAa9dRjVTby9Y7N5wDfZw
+
+GET http://localhost:8000/api/users/audit-logs
+Authorization: Bearer {{token}}
+
