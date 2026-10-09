@@ -3,6 +3,8 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 from app.models.db_models import AccessLevelEnum, RoleEnum
 from app.services.auth_service import get_user_by_id
+
+
 async def ingest_document(
     file_path: str,
     filename: str,
@@ -13,50 +15,42 @@ async def ingest_document(
 ) -> dict:
     """
     Reçoit le fichier déjà sauvegardé sur disque (le router s'en charge),
-    fait le chunking + embedding + stockage ChromaDB + MySQL.
+    fait le chunking + embedding + stockage pgvector + Postgres.
     """
     import uuid
     from pathlib import Path
-    from llama_index.core import SimpleDirectoryReader, VectorStoreIndex, StorageContext
-    from llama_index.vector_stores.chroma import ChromaVectorStore
-    from llama_index.embeddings.ollama import OllamaEmbedding
-    import chromadb
-    from app.models.db_models import Document
+    from llama_index.core import SimpleDirectoryReader
+    from llama_index.core.node_parser import SentenceSplitter
+    from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
+    from app.models.db_models import Document, DocumentChunk
     from app.config import settings
 
     doc_id = str(uuid.uuid4())
 
     # Chunking
     documents = SimpleDirectoryReader(input_files=[file_path]).load_data()
+    splitter = SentenceSplitter(chunk_size=512, chunk_overlap=50)
+    nodes = splitter.get_nodes_from_documents(documents)
 
-    # Métadonnées sur chaque chunk pour le filtrage au retrieval
-    for doc in documents:
-        doc.metadata.update({
-            "doc_id": doc_id,
-            "filename": filename,
-            "access_level": access_level.value,
-            "department": department or "general",
-        })
-
-    # ChromaDB
-    chroma_client = chromadb.PersistentClient(path=settings.CHROMA_PATH)
-    collection = chroma_client.get_or_create_collection("rag_documents")
-    vector_store = ChromaVectorStore(chroma_collection=collection)
-    storage_context = StorageContext.from_defaults(vector_store=vector_store)
-
-    embed_model = OllamaEmbedding(
-        model_name="nomic-embed-text",
-        base_url=settings.OLLAMA_BASE_URL,
+    embed_model = GoogleGenAIEmbedding(
+        model_name=settings.EMBED_MODEL,
+        api_key=settings.GEMINI_API_KEY,
     )
 
-    VectorStoreIndex.from_documents(
-        documents,
-        storage_context=storage_context,
-        embed_model=embed_model,
-        show_progress=True,
-    )
+    for node in nodes:
+        content = node.get_content()
+        embedding = embed_model.get_text_embedding(content)
+        db.add(DocumentChunk(
+            doc_id=doc_id,
+            text=content,
+            access_level=access_level,
+            department=department or "general",
+            filename=filename,
+            page_label=node.metadata.get("page_label"),
+            embedding=embedding,
+        ))
 
-    # MySQL
+    # Postgres (métadonnées document)
     taille_ko = round(Path(file_path).stat().st_size / 1024, 2)
     db_doc = Document(
         id=doc_id,
@@ -78,26 +72,17 @@ async def ingest_document(
         "extension": Path(filename).suffix.lower(),
         "department": department,
         "access_level": access_level,
-        "chunks_indexed": len(documents),
+        "chunks_indexed": len(nodes),
         "message": "Document indexé avec succès",
     }
 
 
 def delete_document_from_index(doc_id: str, db: Session) -> None:
     from pathlib import Path
-    import chromadb
-    from app.models.db_models import Document
-    from app.config import settings
+    from app.models.db_models import Document, DocumentChunk
 
-    # ChromaDB
-    try:
-        chroma_client = chromadb.PersistentClient(path=settings.CHROMA_PATH)
-        collection = chroma_client.get_collection("rag_documents")
-        collection.delete(where={"doc_id": doc_id})
-    except Exception as e:
-        print(f"[INGESTION] ChromaDB delete warning : {e}")
+    db.query(DocumentChunk).filter(DocumentChunk.doc_id == doc_id).delete()
 
-    # MySQL + fichier disque
     doc = db.query(Document).filter(Document.id == doc_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document introuvable")

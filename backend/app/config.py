@@ -18,12 +18,11 @@ class Settings(BaseSettings):
     GROQ_API_KEY: str
     GROQ_MODEL: str = "openai/gpt-oss-120b"
 
-    # Ollama (embeddings)
-    OLLAMA_BASE_URL: str = "http://localhost:11434"
-    EMBED_MODEL: str = "nomic-embed-text"
+    # Gemini (embeddings)
+    GEMINI_API_KEY: str
+    EMBED_MODEL: str = "gemini-embedding-001"
 
     # RAG
-    CHROMA_PATH: str = "./chroma_db"
     DOCUMENTS_PATH: str = "./documents"
     TOP_K: int = 3
     SIMILARITY_THRESHOLD: float = 0.7

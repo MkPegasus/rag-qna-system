@@ -31,7 +31,7 @@ import { Plus, Search, Trash2 } from "lucide-react";
 import { useAuth, ROLE_PERMISSIONS } from "@/contexts/AuthContext";
 import { useNavigate } from "@tanstack/react-router";
 
-const BASE_URL = "http://localhost:8000";
+const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 function authHeaders() {
   const token = localStorage.getItem("token");

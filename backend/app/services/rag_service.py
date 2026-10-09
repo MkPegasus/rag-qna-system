@@ -2,7 +2,7 @@ import time
 import uuid
 import json
 from sqlalchemy.orm import Session
-from llama_index.embeddings.ollama import OllamaEmbedding
+from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
 from llama_index.core import Settings
 from groq import Groq
 from fastapi import HTTPException
@@ -11,7 +11,7 @@ from app.config import settings
 from app.models.db_models import Conversation, Message, RoleEnum
 from app.models.schemas import QueryResponse, SourceNode
 from app.services.audit_service import log_action
-import chromadb
+from app.models.db_models import DocumentChunk
 
 # Mapping rôle → niveaux d'accès autorisés
 ROLE_ACCESS_MAP = {
@@ -22,47 +22,39 @@ ROLE_ACCESS_MAP = {
 }
 
 def _configure_embeddings():
-    Settings.embed_model = OllamaEmbedding(
+    Settings.embed_model = GoogleGenAIEmbedding(
         model_name=settings.EMBED_MODEL,
-        base_url=settings.OLLAMA_BASE_URL
+        api_key=settings.GEMINI_API_KEY
     )
 
 def _get_allowed_access_levels(role: RoleEnum) -> list:
     return ROLE_ACCESS_MAP.get(role, ["PUBLIC"])
 
-def _retrieve_chunks(question: str, role: RoleEnum) -> list:
+def _retrieve_chunks(question: str, role: RoleEnum, db: Session) -> list:
     _configure_embeddings()
 
     allowed_levels = _get_allowed_access_levels(role)
 
-    chroma_client = chromadb.PersistentClient(path=settings.CHROMA_PATH)
-    collection = chroma_client.get_or_create_collection("rag_documents")
-
-    # Générer l'embedding de la question directement via Ollama
-    embed_model = OllamaEmbedding(
+    embed_model = GoogleGenAIEmbedding(
         model_name=settings.EMBED_MODEL,
-        base_url=settings.OLLAMA_BASE_URL
+        api_key=settings.GEMINI_API_KEY
     )
     query_embedding = embed_model.get_query_embedding(question)
 
-    # Interroger ChromaDB directement sans passer par LlamaIndex
-    try:
-        if len(allowed_levels) == 1:
-            where_filter = {"access_level": {"$eq": allowed_levels[0]}}
-        else:
-            where_filter = {"access_level": {"$in": allowed_levels}}
+    distance_expr = DocumentChunk.embedding.cosine_distance(query_embedding)
 
-        results = collection.query(
-            query_embeddings=[query_embedding],
-            n_results=settings.TOP_K,
-            where=where_filter,
-            include=["documents", "metadatas", "distances"],
+    try:
+        results = (
+            db.query(DocumentChunk, distance_expr.label("distance"))
+            .filter(DocumentChunk.access_level.in_(allowed_levels))
+            .order_by(distance_expr)
+            .limit(settings.TOP_K)
+            .all()
         )
     except Exception as e:
-        print(f"[RAG] Erreur ChromaDB query : {e}")
+        print(f"[RAG] Erreur pgvector query : {e}")
         return []
 
-    # Convertir les résultats en objets compatibles avec le reste du code
     class SimpleNode:
         def __init__(self, text, metadata, score):
             self.text = text
@@ -70,17 +62,12 @@ def _retrieve_chunks(question: str, role: RoleEnum) -> list:
             self.score = score
 
     nodes = []
-    if results["documents"] and results["documents"][0]:
-        for text, meta, dist in zip(
-            results["documents"][0],
-            results["metadatas"][0],
-            results["distances"][0],
-        ):
-            nodes.append(SimpleNode(
-                text=text,
-                metadata=meta,
-                score=round(1 - dist, 4),
-            ))
+    for chunk, distance in results:
+        nodes.append(SimpleNode(
+            text=chunk.text,
+            metadata={"file_name": chunk.filename, "page_label": chunk.page_label},
+            score=round(1 - distance, 4),
+        ))
 
     return nodes
 
@@ -122,7 +109,7 @@ def query_documents(
     start_time = time.time()
 
     # 1. Retrieval sécurisé
-    nodes = _retrieve_chunks(question, user_role)
+    nodes = _retrieve_chunks(question, user_role, db) if db else []
 
     if not nodes:
         answer = "Aucun document pertinent trouvé pour répondre à votre question. Vérifiez que des documents ont été indexés et que vous avez les droits d'accès nécessaires."

@@ -1,6 +1,7 @@
 from sqlalchemy import Column, String, Integer, Float, Text, DateTime, ForeignKey, Enum
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
+from pgvector.sqlalchemy import Vector
 from app.database import Base
 import uuid
 import enum
@@ -52,6 +53,20 @@ class Document(Base):
     created_at = Column(DateTime, server_default=func.now())
 
     uploaded_by_user = relationship("User", back_populates="documents")
+
+# ===== DOCUMENT CHUNK (vecteurs) =====
+class DocumentChunk(Base):
+    __tablename__ = "document_chunks"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    doc_id = Column(String(36), ForeignKey("documents.id"), nullable=False, index=True)
+    text = Column(Text, nullable=False)
+    access_level = Column(Enum(AccessLevelEnum), nullable=False, index=True)
+    department = Column(String(100), nullable=True)
+    filename = Column(String(255), nullable=True)
+    page_label = Column(String(50), nullable=True)
+    embedding = Column(Vector(3072), nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
 
 # ===== CONVERSATION =====
 class Conversation(Base):
